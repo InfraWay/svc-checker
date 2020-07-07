@@ -1,0 +1,151 @@
+name: main
+on:
+  push: ~
+  pull_request:
+    types: [closed]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.state != 'closed'
+    steps:
+      - uses: actions/checkout@v1
+
+      - name: Build & Publish Docker image
+        run: |
+          export TAG=${GITHUB_SHA:0:7}
+          export REGISTRY_IMAGE="docker.pkg.github.com/$(echo $GITHUB_REPOSITORY | awk '{print tolower($0)}')/web"
+          echo "$DOCKER_PASSWORD" | docker login docker.pkg.github.com -u "$DOCKER_USERNAME" --password-stdin
+          docker build -t $REGISTRY_IMAGE:$TAG .
+          docker push $REGISTRY_IMAGE:$TAG
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event.pull_request.state != 'closed'
+    steps:
+      - uses: actions/checkout@v1
+
+      - uses: 8BitJonny/gh-find-current-pr@v1.0.3
+        id: find-pull-request
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Deployment config
+        run: |
+          if [ "$PR_NUMBER" != "" ]; then
+            __HOST__="pull-${PR_NUMBER}.${__HOST__}"
+            __APP_NAME__="${__APP_NAME__}-pull-${PR_NUMBER}"
+          fi
+          echo "::set-env name=__HOST__::${__HOST__}"
+          echo "::set-env name=__APP_NAME__::${__APP_NAME__}"
+          echo "::set-env name=__ENVIRONMENT__::${__ENVIRONMENT__}"
+          echo "::set-env name=__TARGET_URL__::https://${__HOST__}"
+        env:
+          __APP_NAME__: web
+          __ENVIRONMENT__: test
+          __HOST__: ${{ secrets.K8S_HOST }}
+          PR_NUMBER: ${{ steps.find-pull-request.outputs.number }}
+
+      - uses: chrnorm/deployment-action@releases/v1
+        name: Create GitHub deployment
+        id: deployment
+        with:
+          token: ${{ github.token }}
+          target_url: ${{ env.__TARGET_URL__ }}
+          environment: ${{ env.__ENVIRONMENT__ }}
+
+      - uses: infraway/create-dns-record@v1.6
+        with:
+          type: "A"
+          name: ${{ env.__HOST__ }}
+          content: ${{ secrets.CLOUDFLARE_IP }}
+          ttl: 1
+          proxied: true
+          token: ${{ secrets.CLOUDFLARE_TOKEN }}
+          zone: ${{ secrets.CLOUDFLARE_ZONE }}
+
+      - name: Update deployment config
+        run: |
+          export __REGISTRY_VERSION__=${GITHUB_SHA:0:7}
+          export REGISTRY_IMAGE="docker.pkg.github.com/$(echo $GITHUB_REPOSITORY | awk '{print tolower($0)}')/web"
+          sed -i "s|__REGISTRY_IMAGE__|${REGISTRY_IMAGE}|" .kube/deployment.yaml
+          sed -i "s|__APP_NAME__|${__APP_NAME__}|" .kube/deployment.yaml
+          sed -i "s|__ENVIRONMENT__|${__ENVIRONMENT__}|" .kube/deployment.yaml
+          sed -i "s|__HOST__|${__HOST__}|" .kube/deployment.yaml
+          sed -i "s|__NAMESPACE__|${__NAMESPACE__}|" .kube/deployment.yaml
+          sed -i "s|__REGISTRY_VERSION__|${__REGISTRY_VERSION__}|" .kube/deployment.yaml
+
+          cat .kube/deployment.yaml
+        if: github.ref == 'refs/heads/master' || steps.find-pull-request.outputs.number
+        env:
+          __NAMESPACE__: ${{ secrets.K8S_NAMESPACE }}
+
+      - name: Deploy
+        uses: actions-hub/kubectl@master
+        if: github.ref == 'refs/heads/master' || steps.find-pull-request.outputs.number
+        env:
+          KUBE_CONFIG: ${{ secrets.K8S_KUBECONFIG }}
+        with:
+          args: apply -f .kube/deployment.yaml
+
+      - name: Update deployment status (success)
+        if: success()
+        uses: chrnorm/deployment-status@releases/v1
+        with:
+          token: ${{ github.token }}
+          target_url: ${{ env.__TARGET_URL__ }}
+          environment_url: ${{ env.__TARGET_URL__ }}
+          state: "success"
+          deployment_id: ${{ steps.deployment.outputs.deployment_id }}
+
+      - name: Update deployment status (failure)
+        if: failure()
+        uses: chrnorm/deployment-status@releases/v1
+        with:
+          token: ${{ github.token }}
+          target_url: ${{ env.__TARGET_URL__ }}
+          environment_url: ${{ env.__TARGET_URL__ }}
+          state: "failure"
+          deployment_id: ${{ steps.deployment.outputs.deployment_id }}
+
+  cleanup:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.number && github.event.pull_request.state == 'closed'
+    steps:
+      - uses: actions/checkout@v1
+
+      - name: Update deployment config
+        run: |
+          export __REGISTRY_VERSION__=${GITHUB_SHA:0:7}
+          export REGISTRY_IMAGE="docker.pkg.github.com/$(echo $GITHUB_REPOSITORY | awk '{print tolower($0)}')/web"
+          export __HOST__="pull-${PR_NUMBER}.${__HOST__}"
+          export __APP_NAME__="${__APP_NAME__}-pull-${PR_NUMBER}"
+          sed -i "s|__REGISTRY_IMAGE__|${REGISTRY_IMAGE}|" .kube/deployment.yaml
+          sed -i "s|__APP_NAME__|${__APP_NAME__}|" .kube/deployment.yaml
+          sed -i "s|__ENVIRONMENT__|${__ENVIRONMENT__}|" .kube/deployment.yaml
+          sed -i "s|__HOST__|${__HOST__}|" .kube/deployment.yaml
+          sed -i "s|__NAMESPACE__|${__NAMESPACE__}|" .kube/deployment.yaml
+          sed -i "s|__REGISTRY_VERSION__|${__REGISTRY_VERSION__}|" .kube/deployment.yaml
+          echo "::set-env name=__HOST__::${__HOST__}"
+        env:
+          __APP_NAME__: web
+          __ENVIRONMENT__: test
+          __NAMESPACE__: ${{ secrets.K8S_NAMESPACE }}
+          __HOST__: ${{ secrets.K8S_HOST }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+
+      - name: Delete k8s resources related to pull request
+        uses: actions-hub/kubectl@master
+        env:
+          KUBE_CONFIG: ${{ secrets.K8S_KUBECONFIG }}
+        with:
+          args: delete -f .kube/deployment.yaml
+
+      - uses: infraway/delete-dns-record@v1.3
+        with:
+          name: ${{ env.__HOST__ }}
+          token: ${{ secrets.CLOUDFLARE_TOKEN }}
+          zone: ${{ secrets.CLOUDFLARE_ZONE }}
