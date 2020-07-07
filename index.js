@@ -8,7 +8,7 @@ const config = {
 };
 
 async function getExternalIP() {
-  const res = await fetch('https://ipinfo.io', {
+  const res = await fetch('https://api.ipify.org?format=json', {
     headers: {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
