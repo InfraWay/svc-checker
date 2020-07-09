@@ -1,2 +1,5 @@
 # svc-expose-ip
-This service exposes user/server IP addresses to check networking
+This service performs several checks:
+- verify and show NAT IP
+- verify and show Redis connection
+- verify and show Mysql connection

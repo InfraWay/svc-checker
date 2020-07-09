@@ -94,13 +94,13 @@ function initMiddlewares(server) {
     const { ip } = await checkExternalIP();
     let redis;
     try {
-      redis = checkRedis();
+      redis = await checkRedis();
     } catch (e) {
       redis = e;
     }
     let mysql;
     try {
-      mysql = checkMysql();
+      mysql = await checkMysql();
     } catch (e) {
       mysql = e;
     }
