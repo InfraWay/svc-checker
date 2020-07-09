@@ -28,9 +28,9 @@ async function checkExternalIP() {
 }
 
 async function checkRedis() {
-  const { REDIS_HOST: host, REDIS_PORT: port } = config;
-  if (host) {
-    return new Promise((resolve, reject) => {
+  return new Promise((resolve, reject) => {
+    const { REDIS_HOST: host, REDIS_PORT: port } = config;
+    if (host) {
       try {
         const client = redis.createClient(port, host);
         client.on('error', (err) => reject({ host, port, err }));
@@ -48,14 +48,16 @@ async function checkRedis() {
       } catch (err) {
         reject({ host, port, err });
       }
-    });
-  }
+      return;
+    }
+    resolve({ msg: 'Mysql is disabled. Set MYSQL_HOST env variable and retry.' })
+  });
 }
 
 async function checkMysql() {
-  const { MYSQL_USER: user, MYSQL_PASSWORD: password, MYSQL_HOST: host, MYSQL_PORT: port, MYSQL_DB: database } = config;
-  if (host) {
-    return new Promise((resolve, reject) => {
+  return new Promise((resolve, reject) => {
+    const { MYSQL_USER: user, MYSQL_PASSWORD: password, MYSQL_HOST: host, MYSQL_PORT: port, MYSQL_DB: database } = config;
+    if (host) {
       try {
         const conn = mysql.createConnection({
           host,
@@ -65,7 +67,7 @@ async function checkMysql() {
           port,
         });
         conn.connect();
-        conn.query('SELECT 1 + 1 AS solution', function (err, results, fields) {
+        conn.query('SELECT 1 + 1 AS solution', (err, results, fields) => {
           if (err) {
             reject({ host, port, err });
             return;
@@ -76,8 +78,10 @@ async function checkMysql() {
       } catch (err) {
         reject({ host, port, err });
       }
-    });
-  }
+      return;
+    }
+    resolve({ msg: 'Redis is disabled. Set REDIS_HOST env variable and retry.' })
+  });
 }
 
 function getUserIP(req) {
@@ -142,7 +146,7 @@ async function runServer() {
 
 if (require.main === module) {
   runServer().then(
-    () => console.info(`The server is running at http://localhost:${config.port}/`),
+    () => console.info(`The server is running at :${config.port}/`),
     (error) => console.error(error.message, error),
   );
 }
