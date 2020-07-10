@@ -80,7 +80,7 @@ async function checkMysql() {
       }
       return;
     }
-    resolve({ msg: 'Redis is disabled. Set REDIS_HOST env variable and retry.' })
+    resolve({ msg: 'Mysql is disabled. Set MYSQL_HOST env variable and retry.' })
   });
 }
 
